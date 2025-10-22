@@ -1,6 +1,8 @@
 #include "params.h"
 
 #include <inttypes.h>
+#include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -70,6 +72,36 @@ void params_init_defaults(Params *params) {
     params->bee.speed_mps = 60.0f;
     params->bee.seek_accel = 220.0f;
     params->bee.arrive_tol_world = params->bee_radius_px * 2.0f;
+
+    params->hex.enabled = true;
+    params->hex.draw_on_top = false;
+    params->hex.show_grid = true;
+    params->hex.cell_size = 48.0f;
+    float world_w = params->world_width_px > 0.0f ? params->world_width_px : (float)params->window_width_px;
+    float world_h = params->world_height_px > 0.0f ? params->world_height_px : (float)params->window_height_px;
+    params->hex.origin_x = world_w * 0.5f;
+    params->hex.origin_y = world_h * 0.5f;
+    const float sqrt3 = 1.7320508075688772f;
+    float col_spacing = sqrt3 * params->hex.cell_size;
+    float row_spacing = 1.5f * params->hex.cell_size;
+    if (col_spacing <= 0.0f) {
+        col_spacing = 1.0f;
+    }
+    if (row_spacing <= 0.0f) {
+        row_spacing = 1.0f;
+    }
+    int q_extent = (int)ceilf((world_w * 0.5f) / col_spacing) + 2;
+    int r_extent = (int)ceilf((world_h * 0.5f) / row_spacing) + 2;
+    if (q_extent < 1) {
+        q_extent = 1;
+    }
+    if (r_extent < 1) {
+        r_extent = 1;
+    }
+    params->hex.q_min = -q_extent;
+    params->hex.q_max = q_extent;
+    params->hex.r_min = -r_extent;
+    params->hex.r_max = r_extent;
 }
 
 bool params_validate(const Params *params, char *err_buf, size_t err_cap) {
@@ -129,6 +161,57 @@ bool params_validate(const Params *params, char *err_buf, size_t err_cap) {
                      params->bee.arrive_tol_world);
         }
         return false;
+    }
+    if (params->hex.enabled) {
+        if (params->hex.cell_size <= 0.0f) {
+            if (err_buf && err_cap > 0) {
+                snprintf(err_buf, err_cap, "hex cell_size (%.2f) must be > 0", params->hex.cell_size);
+            }
+            return false;
+        }
+        if (params->hex.q_min > params->hex.q_max) {
+            if (err_buf && err_cap > 0) {
+                snprintf(err_buf, err_cap,
+                         "hex q_min (%d) must be <= q_max (%d)",
+                         params->hex.q_min,
+                         params->hex.q_max);
+            }
+            return false;
+        }
+        if (params->hex.r_min > params->hex.r_max) {
+            if (err_buf && err_cap > 0) {
+                snprintf(err_buf, err_cap,
+                         "hex r_min (%d) must be <= r_max (%d)",
+                         params->hex.r_min,
+                         params->hex.r_max);
+            }
+            return false;
+        }
+        if (params->hex.q_min < INT16_MIN || params->hex.q_max > INT16_MAX ||
+            params->hex.r_min < INT16_MIN || params->hex.r_max > INT16_MAX) {
+            if (err_buf && err_cap > 0) {
+                snprintf(err_buf, err_cap, "%s",
+                         "hex axial bounds must fit within int16 range");
+            }
+            return false;
+        }
+        int q_span = params->hex.q_max - params->hex.q_min + 1;
+        int r_span = params->hex.r_max - params->hex.r_min + 1;
+        if (q_span <= 0 || r_span <= 0) {
+            if (err_buf && err_cap > 0) {
+                snprintf(err_buf, err_cap, "%s", "hex spans must be positive");
+            }
+            return false;
+        }
+        if (q_span > 65535 || r_span > 65535) {
+            if (err_buf && err_cap > 0) {
+                snprintf(err_buf, err_cap,
+                         "hex spans (%d x %d) exceed supported limits (<= 65535)",
+                         q_span,
+                         r_span);
+            }
+            return false;
+        }
     }
 
     if (params->window_width_px < 320) {

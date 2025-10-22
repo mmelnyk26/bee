@@ -1,9 +1,11 @@
 #include "app.h"
 #include <math.h>
 #include <stddef.h>
+#include "hex.h"
 #include "params.h"
 #include "platform.h"
 #include "render.h"
+#include "render_hex.h"
 #include "sim.h"
 #include "ui.h"
 
@@ -24,6 +26,10 @@ static int g_fb_height = 0;
 static float g_sim_fixed_dt = 1.0f / 120.0f;
 static const double g_sim_max_accumulator = 0.25;
 static size_t g_selected_bee_index = SIZE_MAX;
+static HexWorld g_hex_world = {0};
+static bool g_hex_show_grid = false;
+static bool g_hex_draw_on_top = false;
+static size_t g_hex_selected_index = SIZE_MAX;
 static float clampf(float v, float lo, float hi) {
     if (v < lo) {
         return lo;
@@ -42,6 +48,9 @@ static void app_reset_camera(void) {
 
 static void app_recompute_world_defaults(void);
 static bool app_apply_runtime_params(bool reinit_required);
+static void app_rebuild_hex_world(void);
+static void app_refresh_hex_overlay(void);
+static void app_reset_hex_selection(void);
 
 static void app_update_camera(const Input *input, float dt_sec) {
     if (!input || g_fb_width <= 0 || g_fb_height <= 0) {
@@ -133,6 +142,49 @@ static void app_recompute_world_defaults(void) {
     }
 }
 
+static void app_reset_hex_selection(void) {
+    g_hex_selected_index = SIZE_MAX;
+    ui_set_selected_hex(NULL, false);
+}
+
+static void app_refresh_hex_overlay(void) {
+    bool grid_requested = g_hex_show_grid && g_params.hex.enabled;
+    bool grid_active = grid_requested && g_hex_world.tiles && g_hex_world.count > 0;
+    size_t selected_index = (grid_active && g_hex_selected_index < g_hex_world.count)
+                                ? g_hex_selected_index
+                                : SIZE_MAX;
+    RenderHexParams params = {0};
+    params.world = grid_active ? &g_hex_world : NULL;
+    params.selected_index = selected_index;
+    params.enabled = grid_active;
+    params.draw_on_top = g_hex_draw_on_top;
+    render_hex_set(&g_render, &params);
+    ui_set_hex_overlay(grid_requested, g_hex_draw_on_top);
+    if (grid_active) {
+        if (selected_index != SIZE_MAX) {
+            ui_set_selected_hex(&g_hex_world.tiles[selected_index], true);
+        } else {
+            app_reset_hex_selection();
+        }
+    } else {
+        app_reset_hex_selection();
+    }
+}
+
+static void app_rebuild_hex_world(void) {
+    hex_world_destroy(&g_hex_world);
+    hex_world_init(&g_hex_world);
+    if (g_params.hex.enabled) {
+        if (!hex_world_create(&g_hex_world, &g_params)) {
+            LOG_WARN("app: failed to create hex world");
+        }
+    }
+    if (!g_params.hex.enabled) {
+        g_hex_show_grid = false;
+    }
+    app_refresh_hex_overlay();
+}
+
 static double g_sim_accumulator_sec = 0.0;
 static bool g_sim_paused = false;
 static double g_log_accumulator_sec = 0.0;
@@ -203,6 +255,10 @@ bool app_init(const Params *params) {
 
     ui_init();
     ui_sync_to_params(&g_params, &g_params_runtime);
+    g_hex_show_grid = g_params.hex.enabled && g_params.hex.show_grid;
+    g_hex_draw_on_top = g_params.hex.draw_on_top;
+    g_hex_selected_index = SIZE_MAX;
+    app_rebuild_hex_world();
 
     if (!sim_init(&g_sim, &g_params)) {
         LOG_ERROR("Simulation initialization failed");
